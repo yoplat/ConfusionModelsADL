@@ -1,1 +1,4 @@
 dataset
+output
+src/__pycache__
+.python-version

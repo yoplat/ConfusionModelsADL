@@ -1,0 +1,95 @@
+import zipfile
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from .config import W_MB, W_SH
+
+
+def float_matrix_to_q8rle(x: np.ndarray) -> str:
+    """Encode a [0, 1] float matrix as a column-major run-length uint8 string.
+
+    Format: ``'q8rle <H> <W> <val0> <run0> <val1> <run1> ...'``
+
+    Values are quantised to [0, 255] (multiply by 255, round). The matrix is
+    traversed column-major to match the competition scorer format.
+
+    Args:
+        x: (H, W) float32 array with values in [0, 1].
+
+    Returns:
+        Encoded string.
+    """
+    q = np.clip(np.rint(np.asarray(x, dtype=np.float32) * 255), 0, 255).astype(
+        np.uint8
+    )
+    h, w = q.shape
+    flat = q.T.reshape(-1)
+    if flat.size == 0:
+        return f"q8rle {h} {w}"
+    cuts = np.flatnonzero(flat[1:] != flat[:-1]) + 1
+    starts = np.r_[0, cuts]
+    ends = np.r_[cuts, flat.size]
+    parts = ["q8rle", str(h), str(w)]
+    for v, n in zip(flat[starts], ends - starts):
+        parts += [str(int(v)), str(int(n))]
+    return " ".join(parts)
+
+
+def encode_submission(
+    mb_test: dict,
+    sh_test: dict,
+    mb_train: dict,
+    sh_train: dict,
+    output_dir: Path,
+) -> Path:
+    """Normalise, ensemble, and encode per-class predictions into submission files.
+
+    Per-class normalisation clips each branch to its [0.5th, 99.9th] percentile
+    range computed from training-split scores, then ensembles as a weighted sum
+    (``W_MB * memory_bank + W_SH * seg_head``).
+
+    Writes ``submission.csv`` and ``submission.zip`` to ``output_dir``.
+
+    Args:
+        mb_test:    class_name -> {filename: (H, W) score}.
+        sh_test:    class_name -> {filename: (H, W) score}.
+        mb_train:   class_name -> (N, H, W) training scores for normalisation.
+        sh_train:   class_name -> (N, H, W) training scores for normalisation.
+        output_dir: Directory where output files are written.
+
+    Returns:
+        Path to the submission zip file.
+    """
+    print("\nEncoding submission...")
+    rows = []
+    for class_name in sorted(mb_test.keys()):
+        mb_lo, mb_hi = np.percentile(
+            mb_train[class_name].flatten(), [0.5, 99.9]
+        )
+        sh_lo, sh_hi = np.percentile(
+            sh_train[class_name].flatten(), [0.5, 99.9]
+        )
+        for fn in sorted(mb_test[class_name].keys()):
+            n_mb = np.clip(
+                (mb_test[class_name][fn] - mb_lo) / (mb_hi - mb_lo + 1e-8), 0, 1
+            )
+            n_sh = np.clip(
+                (sh_test[class_name][fn] - sh_lo) / (sh_hi - sh_lo + 1e-8), 0, 1
+            )
+            ens = np.clip(W_MB * n_mb + W_SH * n_sh, 0, 1).astype(np.float32)
+            rows.append({"ID": fn[:-4], "Label": float_matrix_to_q8rle(ens)})
+
+    csv_path = output_dir / "submission.csv"
+    zip_path = output_dir / "submission.zip"
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    with zipfile.ZipFile(
+        zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6
+    ) as zf:
+        zf.write(csv_path, arcname="submission.csv")
+    print(
+        f"Submission written → {zip_path}  "
+        f"({zip_path.stat().st_size / 1024 / 1024:.2f} MB)"
+    )
+    return zip_path
