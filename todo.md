@@ -12,3 +12,4 @@
   the score distribution, which can hurt AP since it relies on fine-grained 
   ranking. Using mixed train + test scores (or just the test scores) for the 
   upper percentile might help.
+- test time augmentation

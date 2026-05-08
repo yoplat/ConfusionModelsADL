@@ -15,8 +15,8 @@ EPOCHS = 40
 SAMPLES_PER_EPOCH = 200  # number of synthetic images at each epoch
 BATCH_SIZE = 16
 LR = 1e-3
-W_MB = 0.45  # memory-bank ensemble weight
-W_SH = 0.55  # seg-head ensemble weight
+W_MB = 0.3  # memory-bank ensemble weight
+W_SH = 0.7  # seg-head ensemble weight
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

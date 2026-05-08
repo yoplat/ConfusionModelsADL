@@ -1,4 +1,3 @@
-import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -42,7 +41,7 @@ def encode_submission(
     sh_test: dict,
     mb_train: dict,
     sh_train: dict,
-    output_dir: Path,
+    run_dir: Path,
 ) -> Path:
     """Normalise, ensemble, and encode per-class predictions into submission files.
 
@@ -50,17 +49,17 @@ def encode_submission(
     range computed from training-split scores, then ensembles as a weighted sum
     (``W_MB * memory_bank + W_SH * seg_head``).
 
-    Writes ``submission.csv`` and ``submission.zip`` to ``output_dir``.
+    Writes ``submission_<timestamp>.csv`` into ``run_dir``.
 
     Args:
-        mb_test:    class_name -> {filename: (H, W) score}.
-        sh_test:    class_name -> {filename: (H, W) score}.
-        mb_train:   class_name -> (N, H, W) training scores for normalisation.
-        sh_train:   class_name -> (N, H, W) training scores for normalisation.
-        output_dir: Directory where output files are written.
+        mb_test:  class_name -> {filename: (H, W) score}.
+        sh_test:  class_name -> {filename: (H, W) score}.
+        mb_train: class_name -> (N, H, W) training scores for normalisation.
+        sh_train: class_name -> (N, H, W) training scores for normalisation.
+        run_dir:  Timestamped run directory (its name is used as the timestamp).
 
     Returns:
-        Path to the submission zip file.
+        Path to the submission CSV file.
     """
     print("\nEncoding submission...")
     rows = []
@@ -81,15 +80,8 @@ def encode_submission(
             ens = np.clip(W_MB * n_mb + W_SH * n_sh, 0, 1).astype(np.float32)
             rows.append({"ID": fn[:-4], "Label": float_matrix_to_q8rle(ens)})
 
-    csv_path = output_dir / "submission.csv"
-    zip_path = output_dir / "submission.zip"
+    ts = run_dir.name
+    csv_path = run_dir / f"submission_{ts}.csv"
     pd.DataFrame(rows).to_csv(csv_path, index=False)
-    with zipfile.ZipFile(
-        zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6
-    ) as zf:
-        zf.write(csv_path, arcname="submission.csv")
-    print(
-        f"Submission written → {zip_path}  "
-        f"({zip_path.stat().st_size / 1024 / 1024:.2f} MB)"
-    )
-    return zip_path
+    print(f"Submission written → {csv_path}")
+    return csv_path

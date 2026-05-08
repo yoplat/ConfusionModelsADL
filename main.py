@@ -152,9 +152,6 @@ def main() -> None:
     )
     torch.cuda.empty_cache()
 
-    # ── Submission ────────────────────────────────────────────────────────────
-    encode_submission(mb_test, sh_test, mb_train, sh_train, args.output_dir)
-
     # ── Checkpoint (timestamped, includes evaluation artefacts) ──────────────
     config_dict = {
         "seed": args.seed,
@@ -173,7 +170,10 @@ def main() -> None:
         shutil.copytree(eval_tmp, run_dir / "evaluation", dirs_exist_ok=True)
         shutil.rmtree(eval_tmp)
 
-    print(f"\nAll outputs in {args.output_dir}")
+    # ── Submission ────────────────────────────────────────────────────────────
+    encode_submission(mb_test, sh_test, mb_train, sh_train, run_dir)
+
+    print(f"\nAll outputs in {run_dir}")
 
 
 if __name__ == "__main__":
