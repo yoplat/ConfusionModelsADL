@@ -17,6 +17,7 @@ BATCH_SIZE = 16
 LR = 1e-3
 W_MB = 0.3  # memory-bank ensemble weight
 W_SH = 0.7  # seg-head ensemble weight
+BLUR_SIGMA = 2  # Gaussian blur sigma applied to the ensemble score map
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

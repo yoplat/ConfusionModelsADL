@@ -19,13 +19,14 @@ matplotlib.use("Agg")  # non-interactive backend; must precede pyplot import
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
+from scipy.ndimage import gaussian_filter
 from sklearn.metrics import (
     average_precision_score,
     roc_auc_score,
     roc_curve,
 )
 
-from .config import IMG_SIZE, W_MB, W_SH
+from .config import BLUR_SIGMA, IMG_SIZE, W_MB, W_SH
 from .inference import memorybank_infer, seghead_infer
 
 
@@ -246,6 +247,8 @@ def _evaluate_class(
     mb_scores, _ = memorybank_infer(model, all_paths, memory_banks[class_name])
     sh_scores, _ = seghead_infer(model, all_paths, seg_heads[class_name])
     ens_scores = W_MB * mb_scores + W_SH * sh_scores  # (N, H, W)
+    if BLUR_SIGMA > 0:
+        ens_scores = np.stack([gaussian_filter(s, sigma=BLUR_SIGMA) for s in ens_scores])
 
     # ── Ground-truth pixel masks ──────────────────────────────────────────────
     zero = np.zeros((IMG_SIZE, IMG_SIZE), dtype=np.uint8)

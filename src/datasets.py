@@ -70,9 +70,12 @@ class TrainSynthDataset(Dataset):
         if random.random() < 0.5 and self.sources:
             src = random.choice(self.sources)
             synth, mask = cut_paste(good_img, src["image"], src["mask"])
-            return self.tf(Image.fromarray(synth)), torch.from_numpy(
-                mask
-            ).float()
-        return self.tf(Image.fromarray(good_img)), torch.zeros(
-            IMG_SIZE, IMG_SIZE
-        )
+        else:
+            synth = good_img
+            mask = np.zeros(good_img.shape[:2], dtype=np.float32)
+
+        if random.random() < 0.5:  # random horizontal flip
+            synth = synth[:, ::-1, :].copy()
+            mask = mask[:, ::-1].copy()
+
+        return self.tf(Image.fromarray(synth)), torch.from_numpy(mask).float()

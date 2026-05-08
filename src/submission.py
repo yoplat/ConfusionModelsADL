@@ -2,8 +2,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.ndimage import gaussian_filter
 
-from .config import W_MB, W_SH
+from .config import BLUR_SIGMA, W_MB, W_SH
 
 
 def float_matrix_to_q8rle(x: np.ndarray) -> str:
@@ -77,7 +78,10 @@ def encode_submission(
             n_sh = np.clip(
                 (sh_test[class_name][fn] - sh_lo) / (sh_hi - sh_lo + 1e-8), 0, 1
             )
-            ens = np.clip(W_MB * n_mb + W_SH * n_sh, 0, 1).astype(np.float32)
+            ens = W_MB * n_mb + W_SH * n_sh
+            if BLUR_SIGMA > 0:
+                ens = gaussian_filter(ens, sigma=BLUR_SIGMA)
+            ens = np.clip(ens, 0, 1).astype(np.float32)
             rows.append({"ID": fn[:-4], "Label": float_matrix_to_q8rle(ens)})
 
     ts = run_dir.name

@@ -11,6 +11,9 @@ from .features import extract_multilayer_patches
 from .model import SegHead
 
 
+_TTA_FLIPS = [[], [-1]]  # original, horizontal flip
+
+
 @torch.no_grad()
 def memorybank_infer(
     model,
@@ -71,8 +74,12 @@ def seghead_infer(
     head: SegHead,
     batch_size: int = 32,
     seed: int = SEED,
+    tta: bool = True,
 ) -> tuple[np.ndarray, list[str]]:
     """Score images using a trained SegHead on multi-layer DINOv2 features.
+
+    With ``tta=True``, scores are averaged over the original, horizontal flip,
+    and vertical flip of each image.
 
     Args:
         model:      DINOv2 backbone.
@@ -80,6 +87,7 @@ def seghead_infer(
         head:       Trained SegHead model.
         batch_size: DataLoader batch size.
         seed:       DataLoader generator seed.
+        tta:        Enable test-time augmentation (h-flip + v-flip).
 
     Returns:
         scores:    (N, IMG_SIZE, IMG_SIZE) float32 anomaly score array.
@@ -99,8 +107,15 @@ def seghead_infer(
     scores, fns = [], []
     for imgs, names in tqdm(loader, desc="SH infer", leave=False):
         imgs = imgs.to(device, non_blocking=True)
-        patches = extract_multilayer_patches(model, imgs)
-        s = torch.sigmoid(head(patches)).squeeze(1).cpu().numpy()
+        aug_scores = []
+        for flip_dims in (_TTA_FLIPS if tta else [[]]):
+            x = torch.flip(imgs, flip_dims) if flip_dims else imgs
+            patches = extract_multilayer_patches(model, x)
+            s = torch.sigmoid(head(patches)).squeeze(1)
+            if flip_dims:
+                s = torch.flip(s, flip_dims)
+            aug_scores.append(s)
+        s = torch.stack(aug_scores).mean(0).cpu().numpy()
         scores.append(s)
         fns.extend(names)
     return np.concatenate(scores, axis=0), fns
