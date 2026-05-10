@@ -11,13 +11,21 @@ MULTILAYER_DIM = FEATURE_DIM * len(LAYERS_TO_USE)  # 1152
 CORESET_RATIO = (
     0.01  # fraction of patches kept in the memory bank (greedy k-center)
 )
-EPOCHS = 40
+EPOCHS = 30
 SAMPLES_PER_EPOCH = 200  # number of synthetic images at each epoch
 BATCH_SIZE = 16
 LR = 1e-3
-W_MB = 0.3  # memory-bank ensemble weight
-W_SH = 0.7  # seg-head ensemble weight
+W_MB = 0.0  # memory-bank weight; seg-head weight = 1 - W_MB
 BLUR_SIGMA = 2  # Gaussian blur sigma applied to the ensemble score map
+
+# SegHead training data mix (must sum to 1.0)
+P_GOOD = 0.30  # fraction of batches that are clean good images
+P_REAL = 0.40  # fraction that are real training-split anomalies (with GT mask)
+# remaining 0.30 → cut-paste synthetic anomalies
+
+# Score normalisation percentiles
+P_LO = 0.5
+P_HI = 99.999
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

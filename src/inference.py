@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 from tqdm import tqdm
 
-from .config import IMG_SIZE, PATCH_GRID, SEED, device, worker_init_fn
+from .config import IMG_SIZE, PATCH_GRID, SEED, W_MB, device, worker_init_fn
 from .datasets import TestDataset, preprocess
 from .features import extract_multilayer_patches
 from .model import SegHead
@@ -152,13 +152,14 @@ def run_inference(
         test_dir = data_root / class_name / "test"
         test = [str(p) for p in sorted(test_dir.glob("*.png"))]
 
-        mb_tr, _ = memorybank_infer(model, good, memory_banks[class_name])
-        mb_te, mfns = memorybank_infer(model, test, memory_banks[class_name])
+        if W_MB > 0:
+            mb_tr, _ = memorybank_infer(model, good, memory_banks[class_name])
+            mb_te, mfns = memorybank_infer(model, test, memory_banks[class_name])
+            mb_train[class_name] = mb_tr
+            mb_test[class_name] = dict(zip(mfns, mb_te))
+
         sh_tr, _ = seghead_infer(model, good, seg_heads[class_name])
         sh_te, sfns = seghead_infer(model, test, seg_heads[class_name])
-
-        mb_train[class_name] = mb_tr
-        mb_test[class_name] = dict(zip(mfns, mb_te))
         sh_train[class_name] = sh_tr
         sh_test[class_name] = dict(zip(sfns, sh_te))
         print(f"  {class_name} done")

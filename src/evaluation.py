@@ -1,12 +1,8 @@
 """
-Evaluation utilities: metrics on training-domain data + visualisations.
+Evaluation utilities: metrics on held-out validation data + visualisations.
 
-We evaluate on the training split (good images + anomaly images whose masks are
-available in ground_truth_train/) because the competition test labels are not
-released. This gives a proxy for model quality. Note the SegHead was trained
-with synthetic anomalies derived from these same images, so the pixel AUROC
-here is an optimistic upper bound — treat it as a debugging signal, not a
-held-out score.
+2 out of 5 images per anomaly type are reserved as a validation set and never
+seen during SegHead training, giving an unbiased proxy for generalisation.
 """
 
 import json
@@ -26,55 +22,37 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from .config import BLUR_SIGMA, IMG_SIZE, W_MB, W_SH
+from .config import BLUR_SIGMA, IMG_SIZE, W_MB
 from .inference import memorybank_infer, seghead_infer
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 
-def _load_eval_data(
+def _load_good_paths(
     data_root: Path,
     class_name: str,
     max_good: int | None = 150,
     seed: int = 0,
-) -> tuple[list[str], list[dict]]:
-    """Return good image paths and paired anomaly (path, mask) dicts.
+) -> list[str]:
+    """Return a (capped) list of good-image paths for one class.
 
     Args:
         data_root:  Dataset root.
         class_name: Class subdirectory name.
-        max_good:   Cap on the number of good images used (randomly sampled).
-                    Pass ``None`` to use all. Does not affect submission scores.
-        seed:       RNG seed for the good-image subsample.
+        max_good:   Cap on the number of good images (randomly sampled).
+                    Pass ``None`` to use all.
+        seed:       RNG seed for subsampling.
 
     Returns:
-        good_paths:    List of good-image path strings (at most max_good).
-        anomaly_items: List of {'path': str, 'mask': ndarray} for each anomaly.
+        List of good-image path strings (at most max_good).
     """
-    cls_dir = data_root / class_name
-    good_dir = cls_dir / "train" / "good"
-    gt_dir = cls_dir / "ground_truth_train"
-    train_dir = cls_dir / "train"
-
-    all_good = sorted(good_dir.glob("*.png"))
+    all_good = sorted((data_root / class_name / "train" / "good").glob("*.png"))
     if max_good is not None and len(all_good) > max_good:
         rng = np.random.default_rng(seed)
         idx = rng.choice(len(all_good), size=max_good, replace=False)
         all_good = [all_good[i] for i in sorted(idx)]
-    good_paths = [str(p) for p in all_good]
-
-    anomaly_items: list[dict] = []
-    for ano_gt_subdir in sorted(gt_dir.iterdir()):
-        ano_img_subdir = train_dir / ano_gt_subdir.name
-        for mask_path in sorted(ano_gt_subdir.glob("*.png")):
-            mask = np.array(Image.open(mask_path).convert("L"))
-            if mask.max() == 0:
-                continue
-            img_path = ano_img_subdir / mask_path.name
-            anomaly_items.append({"path": str(img_path), "mask": mask})
-
-    return good_paths, anomaly_items
+    return [str(p) for p in all_good]
 
 
 def _resize_mask(mask: np.ndarray) -> np.ndarray:
@@ -213,6 +191,7 @@ def _evaluate_class(
     class_name: str,
     memory_banks: dict,
     seg_heads: dict,
+    val_items: list[dict],
     plot_dir: Path,
     n_vis: int = 4,
     max_good: int | None = 150,
@@ -224,8 +203,9 @@ def _evaluate_class(
         model:        Frozen DINOv2 backbone.
         data_root:    Dataset root.
         class_name:   Class to evaluate.
-        memory_banks: Per-class memory banks.
+        memory_banks: Per-class memory banks (may be empty if W_MB == 0).
         seg_heads:    Per-class SegHead models.
+        val_items:    Held-out anomaly items: list of {'path': str, 'mask': ndarray}.
         plot_dir:     Directory where PNG files are saved.
         n_vis:        Number of anomaly examples to visualise.
         max_good:     Cap on good images for evaluation (None = all).
@@ -235,48 +215,43 @@ def _evaluate_class(
         Metrics dict with keys: pixel_auroc_{mb,sh,ens}, image_auroc_ens,
         avg_precision_ens, n_good, n_anomaly.
     """
-    good_paths, anomaly_items = _load_eval_data(data_root, class_name, max_good, seed)
-    if not anomaly_items or not good_paths:
+    W_SH = 1.0 - W_MB
+    good_paths = _load_good_paths(data_root, class_name, max_good, seed)
+    if not val_items or not good_paths:
         return {}
 
-    ano_paths = [it["path"] for it in anomaly_items]
+    ano_paths = [it["path"] for it in val_items]
     all_paths = good_paths + ano_paths
     n_good = len(good_paths)
 
     # ── Raw inference scores ──────────────────────────────────────────────────
-    mb_scores, _ = memorybank_infer(model, all_paths, memory_banks[class_name])
     sh_scores, _ = seghead_infer(model, all_paths, seg_heads[class_name])
-    ens_scores = W_MB * mb_scores + W_SH * sh_scores  # (N, H, W)
+    if W_MB > 0:
+        mb_scores, _ = memorybank_infer(model, all_paths, memory_banks[class_name])
+        ens_scores = W_MB * mb_scores + W_SH * sh_scores
+    else:
+        mb_scores = None
+        ens_scores = sh_scores.copy()
     if BLUR_SIGMA > 0:
         ens_scores = np.stack([gaussian_filter(s, sigma=BLUR_SIGMA) for s in ens_scores])
 
     # ── Ground-truth pixel masks ──────────────────────────────────────────────
     zero = np.zeros((IMG_SIZE, IMG_SIZE), dtype=np.uint8)
-    gt_masks = [zero] * n_good + [
-        _resize_mask(it["mask"]) for it in anomaly_items
-    ]
+    gt_masks = [zero] * n_good + [_resize_mask(it["mask"]) for it in val_items]
     gt_flat = np.stack(gt_masks).flatten().astype(int)
 
-    # Guard: skip if all GT pixels are the same class (roc_auc_score would fail)
     if gt_flat.min() == gt_flat.max():
         return {}
 
     # ── Pixel-level AUROC ─────────────────────────────────────────────────────
-    score_dict = {
-        "Memory Bank": mb_scores.flatten(),
-        "SegHead": sh_scores.flatten(),
-        "Ensemble": ens_scores.flatten(),
-    }
-    aucs = _save_roc_curve(
-        gt_flat,
-        score_dict,
-        class_name,
-        plot_dir / f"{class_name}_roc.png",
-    )
+    score_dict = {"SegHead": sh_scores.flatten(), "Ensemble": ens_scores.flatten()}
+    if mb_scores is not None:
+        score_dict["Memory Bank"] = mb_scores.flatten()
+    aucs = _save_roc_curve(gt_flat, score_dict, class_name, plot_dir / f"{class_name}_roc.png")
 
     # ── Image-level AUROC ─────────────────────────────────────────────────────
     image_scores = ens_scores.reshape(len(all_paths), -1).max(axis=1)
-    image_labels = [0] * n_good + [1] * len(anomaly_items)
+    image_labels = [0] * n_good + [1] * len(val_items)
     image_auroc = float(roc_auc_score(image_labels, image_scores))
     avg_prec = float(average_precision_score(image_labels, image_scores))
 
@@ -290,22 +265,24 @@ def _evaluate_class(
 
     # ── Heatmap visualisations ────────────────────────────────────────────────
     _save_heatmaps(
-        anomaly_items,
+        val_items,
         ens_scores[n_good:],
         class_name,
         plot_dir / f"{class_name}_heatmaps.png",
         n=n_vis,
     )
 
-    return {
-        "pixel_auroc_mb": aucs["Memory Bank"],
+    metrics = {
         "pixel_auroc_sh": aucs["SegHead"],
         "pixel_auroc_ens": aucs["Ensemble"],
         "image_auroc_ens": image_auroc,
         "avg_precision_ens": avg_prec,
         "n_good": n_good,
-        "n_anomaly": len(anomaly_items),
+        "n_anomaly": len(val_items),
     }
+    if mb_scores is not None:
+        metrics["pixel_auroc_mb"] = aucs["Memory Bank"]
+    return metrics
 
 
 # ── Top-level entry point ─────────────────────────────────────────────────────
@@ -316,23 +293,25 @@ def evaluate_all(
     data_root: Path,
     memory_banks: dict,
     seg_heads: dict,
+    val_sources: dict[str, list[dict]],
     run_dir: Path,
     n_vis: int = 4,
     max_good: int | None = 150,
     seed: int = 0,
 ) -> dict:
-    """Evaluate all classes and print a summary table.
+    """Evaluate all classes on held-out validation anomalies and print a summary.
 
     Results (metrics + plots) are saved under ``run_dir/evaluation/``.
 
     Args:
         model:        Frozen DINOv2 backbone.
         data_root:    Dataset root.
-        memory_banks: Per-class memory banks.
+        memory_banks: Per-class memory banks (may be empty if W_MB == 0).
         seg_heads:    Per-class SegHead models.
+        val_sources:  Held-out anomaly items per class from collect_anomaly_sources.
         run_dir:      Timestamped run directory.
         n_vis:        Anomaly heatmap examples per class.
-        max_good:     Max good images per class for proxy evaluation (None = all).
+        max_good:     Max good images per class for evaluation (None = all).
         seed:         RNG seed for good-image subsampling.
 
     Returns:
@@ -342,7 +321,7 @@ def evaluate_all(
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     all_metrics: dict[str, dict] = {}
-    print("\nEvaluating on training data (proxy metrics)...")
+    print("\nEvaluating on held-out validation anomalies...")
     for class_name in tqdm(sorted(seg_heads.keys()), desc="Evaluating classes"):
         m = _evaluate_class(
             model,
@@ -350,6 +329,7 @@ def evaluate_all(
             class_name,
             memory_banks,
             seg_heads,
+            val_sources.get(class_name, []),
             plot_dir,
             n_vis=n_vis,
             max_good=max_good,
@@ -359,38 +339,45 @@ def evaluate_all(
             all_metrics[class_name] = m
 
     # ── Print summary table ───────────────────────────────────────────────────
+    use_mb = W_MB > 0
     header = (
-        f"{'Class':<12} {'Px-AUC MB':>10} {'Px-AUC SH':>10} "
-        f"{'Px-AUC Ens':>11} {'Img-AUC Ens':>12} {'AvgPrec':>8}"
+        f"{'Class':<12}"
+        + (f" {'Px-AUC MB':>10}" if use_mb else "")
+        + f" {'Px-AUC SH':>10} {'Px-AUC Ens':>11} {'Img-AUC':>8} {'AvgPrec':>8}"
     )
     print(f"\n{header}")
     print("-" * len(header))
     for cls, m in all_metrics.items():
-        print(
-            f"{cls:<12} {m['pixel_auroc_mb']:>10.3f} {m['pixel_auroc_sh']:>10.3f} "
-            f"{m['pixel_auroc_ens']:>11.3f} {m['image_auroc_ens']:>12.3f} "
-            f"{m['avg_precision_ens']:>8.3f}"
+        row = f"{cls:<12}"
+        if use_mb:
+            row += f" {m.get('pixel_auroc_mb', 0):>10.3f}"
+        row += (
+            f" {m['pixel_auroc_sh']:>10.3f}"
+            f" {m['pixel_auroc_ens']:>11.3f}"
+            f" {m['image_auroc_ens']:>8.3f}"
+            f" {m['avg_precision_ens']:>8.3f}"
         )
+        print(row)
+
     if all_metrics:
-        keys = [
-            "pixel_auroc_mb",
-            "pixel_auroc_sh",
-            "pixel_auroc_ens",
-            "image_auroc_ens",
-            "avg_precision_ens",
-        ]
+        keys = ["pixel_auroc_sh", "pixel_auroc_ens", "image_auroc_ens", "avg_precision_ens"]
+        if use_mb:
+            keys = ["pixel_auroc_mb"] + keys
         means = {
-            k: float(np.mean([m[k] for m in all_metrics.values()]))
+            k: float(np.mean([m[k] for m in all_metrics.values() if k in m]))
             for k in keys
         }
         print("-" * len(header))
-        print(
-            f"{'MEAN':<12} {means['pixel_auroc_mb']:>10.3f} "
-            f"{means['pixel_auroc_sh']:>10.3f} "
-            f"{means['pixel_auroc_ens']:>11.3f} "
-            f"{means['image_auroc_ens']:>12.3f} "
-            f"{means['avg_precision_ens']:>8.3f}"
+        row = f"{'MEAN':<12}"
+        if use_mb:
+            row += f" {means.get('pixel_auroc_mb', 0):>10.3f}"
+        row += (
+            f" {means['pixel_auroc_sh']:>10.3f}"
+            f" {means['pixel_auroc_ens']:>11.3f}"
+            f" {means['image_auroc_ens']:>8.3f}"
+            f" {means['avg_precision_ens']:>8.3f}"
         )
+        print(row)
         all_metrics["_mean"] = means
 
     # ── Persist metrics ───────────────────────────────────────────────────────

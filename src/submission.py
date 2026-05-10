@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter
 
-from .config import BLUR_SIGMA, W_MB, W_SH
+from .config import BLUR_SIGMA, P_HI, P_LO, W_MB
 
 
 def float_matrix_to_q8rle(x: np.ndarray) -> str:
@@ -62,23 +62,26 @@ def encode_submission(
     Returns:
         Path to the submission CSV file.
     """
+    W_SH = 1.0 - W_MB
     print("\nEncoding submission...")
     rows = []
-    for class_name in sorted(mb_test.keys()):
-        mb_lo, mb_hi = np.percentile(
-            mb_train[class_name].flatten(), [0.5, 99.9]
-        )
+    for class_name in sorted(sh_test.keys()):
         sh_lo, sh_hi = np.percentile(
-            sh_train[class_name].flatten(), [0.5, 99.9]
+            sh_train[class_name].flatten(), [P_LO, P_HI]
         )
-        for fn in sorted(mb_test[class_name].keys()):
-            n_mb = np.clip(
-                (mb_test[class_name][fn] - mb_lo) / (mb_hi - mb_lo + 1e-8), 0, 1
-            )
+        for fn in sorted(sh_test[class_name].keys()):
             n_sh = np.clip(
                 (sh_test[class_name][fn] - sh_lo) / (sh_hi - sh_lo + 1e-8), 0, 1
             )
-            ens = W_MB * n_mb + W_SH * n_sh
+            ens = W_SH * n_sh
+            if W_MB > 0:
+                mb_lo, mb_hi = np.percentile(
+                    mb_train[class_name].flatten(), [P_LO, P_HI]
+                )
+                n_mb = np.clip(
+                    (mb_test[class_name][fn] - mb_lo) / (mb_hi - mb_lo + 1e-8), 0, 1
+                )
+                ens = ens + W_MB * n_mb
             if BLUR_SIGMA > 0:
                 ens = gaussian_filter(ens, sigma=BLUR_SIGMA)
             ens = np.clip(ens, 0, 1).astype(np.float32)

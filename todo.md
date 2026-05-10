@@ -1,5 +1,7 @@
 # TODOs
 
+- check what happens to the anomaly maps with no contribution from the 
+  patch core.
 - separate the background from the actual objects before computing the anomaly,
   a lot of background noise.
 - better training and test visualization stats

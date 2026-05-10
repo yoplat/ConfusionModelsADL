@@ -18,6 +18,7 @@ from src.config import (
     CORESET_RATIO,
     EPOCHS,
     SEED,
+    W_MB,
     device,
     set_all_seeds,
 )
@@ -80,11 +81,6 @@ def main() -> None:
         help="Max good images per class used for proxy evaluation "
         "(does not affect submission scores; pass 0 for all). Default: %(default)s.",
     )
-    parser.add_argument(
-        "--rebuild-banks",
-        action="store_true",
-        help="Ignore any existing memory bank cache and recompute from scratch",
-    )
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -107,21 +103,23 @@ def main() -> None:
         p.requires_grad = False
 
     # ── Training ──────────────────────────────────────────────────────────────
-    bank_cache = None if args.rebuild_banks else args.output_dir / "bank_cache"
-    memory_banks = build_memory_banks(
-        dinov2,
-        args.data_root,
-        coreset_ratio=args.coreset_ratio,
-        seed=args.seed,
-        coreset_method=args.coreset_method,
-        cache_dir=bank_cache,
-    )
-    anomaly_sources = collect_anomaly_sources(args.data_root)
+    if W_MB > 0:
+        memory_banks = build_memory_banks(
+            dinov2,
+            args.data_root,
+            coreset_ratio=args.coreset_ratio,
+            seed=args.seed,
+            coreset_method=args.coreset_method,
+        )
+    else:
+        memory_banks = {}
+        print("W_MB=0: skipping memory bank construction")
+
+    train_sources, val_sources = collect_anomaly_sources(args.data_root)
     seg_heads = train_seg_heads(
         dinov2,
         args.data_root,
-        anomaly_sources,
-        args.output_dir,
+        train_sources,
         epochs=args.epochs,
         seed=args.seed,
     )
@@ -136,6 +134,7 @@ def main() -> None:
         args.data_root,
         memory_banks,
         seg_heads,
+        val_sources,
         run_dir=eval_tmp,
         n_vis=args.n_vis,
         max_good=eval_max_good,
