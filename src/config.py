@@ -11,7 +11,8 @@ MULTILAYER_DIM = FEATURE_DIM * len(LAYERS_TO_USE)  # 1152
 CORESET_RATIO = (
     0.01  # fraction of patches kept in the memory bank (greedy k-center)
 )
-EPOCHS = 30
+EPOCHS = 50
+PATIENCE = 5  # early-stopping patience in epochs
 SAMPLES_PER_EPOCH = 200  # number of synthetic images at each epoch
 BATCH_SIZE = 16
 LR = 1e-3

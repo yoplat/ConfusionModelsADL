@@ -1,3 +1,4 @@
+import copy
 import gc
 from collections import defaultdict
 from pathlib import Path
@@ -6,13 +7,16 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
+from sklearn.metrics import average_precision_score
 from torch.utils.data import DataLoader
 
 from .config import (
     BATCH_SIZE,
     CORESET_RATIO,
     EPOCHS,
+    IMG_SIZE,
     LR,
+    PATIENCE,
     SAMPLES_PER_EPOCH,
     SEED,
     device,
@@ -115,14 +119,46 @@ def collect_anomaly_sources(
     return train_sources, val_items
 
 
+@torch.no_grad()
+def _val_pixel_ap(model, head, val_items: list[dict]) -> float:
+    """Pixel-level average precision on held-out val anomaly images."""
+    from .datasets import preprocess
+    from .features import extract_multilayer_patches
+    head.eval()
+    all_preds, all_gt = [], []
+    for item in val_items:
+        img = preprocess(Image.open(item["path"]).convert("RGB")).unsqueeze(0).to(device)
+        patches = extract_multilayer_patches(model, img)
+        score = torch.sigmoid(head(patches)).squeeze().cpu().numpy()
+        mask = (item["mask"] > 0).astype(np.uint8)
+        if mask.shape != (IMG_SIZE, IMG_SIZE):
+            mask = (
+                np.array(
+                    Image.fromarray(mask * 255).resize((IMG_SIZE, IMG_SIZE), Image.NEAREST)
+                ) > 127
+            ).astype(np.uint8)
+        all_preds.append(score.flatten())
+        all_gt.append(mask.flatten())
+    gt = np.concatenate(all_gt)
+    if gt.max() == 0:
+        return 0.0
+    return float(average_precision_score(gt, np.concatenate(all_preds)))
+
+
 def train_seg_heads(
     model,
     data_root: Path,
     anomaly_sources: dict,
+    val_sources: dict,
     epochs: int = EPOCHS,
+    patience: int = PATIENCE,
     seed: int = SEED,
 ) -> dict[str, SegHead]:
-    """Train one SegHead per class using synthetic cut-paste anomaly augmentation.
+    """Train one SegHead per class with patience-based early stopping.
+
+    Pixel-level average precision on the held-out val images is checked after
+    every epoch. Training stops when no improvement is seen for ``patience``
+    consecutive epochs; the best weights are restored before returning.
 
     DINOv2 features are extracted with ``torch.no_grad()``; only SegHead
     parameters are updated.
@@ -130,8 +166,10 @@ def train_seg_heads(
     Args:
         model:           Frozen DINOv2 backbone.
         data_root:       Dataset root.
-        anomaly_sources: Per-class anomaly pairs from :func:`collect_anomaly_sources`.
-        epochs:          Training epochs per class.
+        anomaly_sources: Per-class training anomaly pairs.
+        val_sources:     Per-class held-out anomaly items for early stopping.
+        epochs:          Maximum training epochs per class.
+        patience:        Epochs without improvement before stopping.
         seed:            Base seed; each class gets ``seed + class_index``.
 
     Returns:
@@ -162,6 +200,11 @@ def train_seg_heads(
         head = SegHead().to(device)
         optim = torch.optim.AdamW(head.parameters(), lr=LR, weight_decay=1e-4)
 
+        class_val = val_sources.get(class_name, [])
+        best_ap = -1.0
+        best_state = None
+        no_improve = 0
+
         for epoch in range(epochs):
             head.train()
             epoch_loss = 0.0
@@ -175,13 +218,31 @@ def train_seg_heads(
                 loss.backward()
                 optim.step()
                 epoch_loss += loss.item()
-            if (epoch + 1) % 10 == 0:
+
+            if class_val:
+                val_ap = _val_pixel_ap(model, head, class_val)
+                head.train()
+                if val_ap > best_ap:
+                    best_ap = val_ap
+                    best_state = copy.deepcopy(head.state_dict())
+                    no_improve = 0
+                else:
+                    no_improve += 1
+
+            if (epoch + 1) % 10 == 0 or no_improve == patience:
+                ap_str = f"  val_ap={best_ap:.4f}  no_improve={no_improve}/{patience}" if class_val else ""
                 print(
                     f"  {class_name} epoch {epoch + 1:2d}/{epochs}  "
-                    f"loss={epoch_loss / len(loader):.4f}"
+                    f"loss={epoch_loss / len(loader):.4f}{ap_str}"
                 )
 
+            if no_improve >= patience:
+                print(f"  {class_name} early stop at epoch {epoch + 1}")
+                break
+
+        if best_state is not None:
+            head.load_state_dict(best_state)
         head.eval()
         seg_heads[class_name] = head
-        print(f"  {class_name} done")
+        print(f"  {class_name} done  (best val_ap={best_ap:.4f})" if class_val else f"  {class_name} done")
     return seg_heads

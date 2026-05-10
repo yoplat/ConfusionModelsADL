@@ -17,6 +17,7 @@ warnings.filterwarnings("ignore", message="xFormers is not available")
 from src.config import (
     CORESET_RATIO,
     EPOCHS,
+    PATIENCE,
     SEED,
     W_MB,
     device,
@@ -67,6 +68,12 @@ def main() -> None:
         type=int,
         default=EPOCHS,
         help="SegHead training epochs per class (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=PATIENCE,
+        help="Early-stopping patience in epochs (default: %(default)s)",
     )
     parser.add_argument(
         "--n-vis",
@@ -120,7 +127,9 @@ def main() -> None:
         dinov2,
         args.data_root,
         train_sources,
+        val_sources,
         epochs=args.epochs,
+        patience=args.patience,
         seed=args.seed,
     )
     torch.cuda.empty_cache()
