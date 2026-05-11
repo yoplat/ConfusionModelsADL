@@ -25,7 +25,7 @@ P_REAL = 0.40  # fraction that are real training-split anomalies (with GT mask)
 # remaining 0.30 → cut-paste synthetic anomalies
 
 # Score normalisation percentiles
-P_LO = 0.5
+P_LO = 5.0
 P_HI = 99.999
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
