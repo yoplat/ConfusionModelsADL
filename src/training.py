@@ -115,7 +115,9 @@ def collect_anomaly_sources(
                 img = np.array(Image.open(img_path).convert("RGB"))
                 train_sources[class_name].append({"image": img, "mask": mask})
             for img_path, mask in pairs[3:]:
-                val_items[class_name].append({"path": str(img_path), "mask": mask})
+                val_items[class_name].append(
+                    {"path": str(img_path), "mask": mask}
+                )
     return train_sources, val_items
 
 
@@ -124,18 +126,26 @@ def _val_pixel_ap(model, head, val_items: list[dict]) -> float:
     """Pixel-level average precision on held-out val anomaly images."""
     from .datasets import preprocess
     from .features import extract_multilayer_patches
+
     head.eval()
     all_preds, all_gt = [], []
     for item in val_items:
-        img = preprocess(Image.open(item["path"]).convert("RGB")).unsqueeze(0).to(device)
+        img = (
+            preprocess(Image.open(item["path"]).convert("RGB"))
+            .unsqueeze(0)
+            .to(device)
+        )
         patches = extract_multilayer_patches(model, img)
         score = torch.sigmoid(head(patches)).squeeze().cpu().numpy()
         mask = (item["mask"] > 0).astype(np.uint8)
         if mask.shape != (IMG_SIZE, IMG_SIZE):
             mask = (
                 np.array(
-                    Image.fromarray(mask * 255).resize((IMG_SIZE, IMG_SIZE), Image.NEAREST)
-                ) > 127
+                    Image.fromarray(mask * 255).resize(
+                        (IMG_SIZE, IMG_SIZE), Image.NEAREST
+                    )
+                )
+                > 127
             ).astype(np.uint8)
         all_preds.append(score.flatten())
         all_gt.append(mask.flatten())
@@ -192,7 +202,7 @@ def train_seg_heads(
                 good_paths, sources, SAMPLES_PER_EPOCH, preprocess
             ),
             batch_size=BATCH_SIZE,
-            num_workers=2,
+            num_workers=8,
             pin_memory=True,
             generator=g,
             worker_init_fn=worker_init_fn,
@@ -230,7 +240,11 @@ def train_seg_heads(
                     no_improve += 1
 
             if (epoch + 1) % 10 == 0 or no_improve == patience:
-                ap_str = f"  val_ap={best_ap:.4f}  no_improve={no_improve}/{patience}" if class_val else ""
+                ap_str = (
+                    f"  val_ap={best_ap:.4f}  no_improve={no_improve}/{patience}"
+                    if class_val
+                    else ""
+                )
                 print(
                     f"  {class_name} epoch {epoch + 1:2d}/{epochs}  "
                     f"loss={epoch_loss / len(loader):.4f}{ap_str}"
@@ -244,5 +258,9 @@ def train_seg_heads(
             head.load_state_dict(best_state)
         head.eval()
         seg_heads[class_name] = head
-        print(f"  {class_name} done  (best val_ap={best_ap:.4f})" if class_val else f"  {class_name} done")
+        print(
+            f"  {class_name} done  (best val_ap={best_ap:.4f})"
+            if class_val
+            else f"  {class_name} done"
+        )
     return seg_heads

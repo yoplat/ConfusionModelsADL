@@ -13,9 +13,9 @@ CORESET_RATIO = (
 )
 EPOCHS = 50
 PATIENCE = 5  # early-stopping patience in epochs
-SAMPLES_PER_EPOCH = 200  # number of synthetic images at each epoch
-BATCH_SIZE = 16
-LR = 1e-3
+SAMPLES_PER_EPOCH = 500  # number of synthetic images at each epoch
+BATCH_SIZE = 32
+LR = 1e-4
 W_MB = 0.0  # memory-bank weight; seg-head weight = 1 - W_MB
 BLUR_SIGMA = 2  # Gaussian blur sigma applied to the ensemble score map
 
