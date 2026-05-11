@@ -22,7 +22,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from .config import BLUR_SIGMA, IMG_SIZE, W_MB
+from .config import BLUR_SIGMA, IMG_SIZE, P_HI, P_LO, W_MB
 from .inference import memorybank_infer, seghead_infer
 
 
@@ -135,25 +135,27 @@ def _save_heatmaps(
     class_name: str,
     save_path: Path,
     n: int = 4,
+    vis_scores: np.ndarray | None = None,
 ) -> None:
-    """Grid of (original | GT mask | score map | overlay) for anomaly examples.
+    """Grid of (original | GT mask | raw score | normalised score | overlay) for anomaly examples.
 
     Args:
         items:      List of {'path', 'mask'} anomaly dicts (sorted by score).
-        ens_scores: (N_anomaly, H, W) ensemble score array matching items.
+        ens_scores: (N_anomaly, H, W) raw ensemble score array matching items.
         class_name: Used in the figure title.
         save_path:  Output PNG path.
         n:          Number of examples to show.
+        vis_scores: (N_anomaly, H, W) normalised scores; if provided a second
+                    score column is shown alongside the raw one.
     """
     n = min(n, len(items))
     if n == 0:
         return
 
-    # Show the highest-scoring examples first
     order = np.argsort([s.max() for s in ens_scores])[::-1][:n]
 
-    fig, axes = plt.subplots(n, 4, figsize=(14, 3.5 * n), squeeze=False)
-    cols = ["Original", "GT Mask", "Score Map", "Overlay"]
+    cols = ["Original", "GT Mask", "Raw Score", "Norm Score", "Overlay"] if vis_scores is not None else ["Original", "GT Mask", "Score Map", "Overlay"]
+    fig, axes = plt.subplots(n, len(cols), figsize=(3.5 * len(cols), 3.5 * n), squeeze=False)
     for col, title in enumerate(cols):
         axes[0, col].set_title(title, fontsize=10)
 
@@ -169,10 +171,14 @@ def _save_heatmaps(
         axes[row, 0].imshow(img)
         axes[row, 1].imshow(mask, cmap="gray", vmin=0, vmax=1)
         axes[row, 2].imshow(score, cmap="hot", vmin=0, vmax=score.max() + 1e-8)
-        axes[row, 3].imshow(img)
-        axes[row, 3].imshow(
-            score, cmap="hot", alpha=0.55, vmin=0, vmax=score.max() + 1e-8
-        )
+        if vis_scores is not None:
+            vs = vis_scores[idx]
+            axes[row, 3].imshow(vs, cmap="hot", vmin=0, vmax=1)
+            axes[row, 4].imshow(img)
+            axes[row, 4].imshow(vs, cmap="hot", alpha=0.55, vmin=0, vmax=1)
+        else:
+            axes[row, 3].imshow(img)
+            axes[row, 3].imshow(score, cmap="hot", alpha=0.55, vmin=0, vmax=score.max() + 1e-8)
         for ax in axes[row]:
             ax.axis("off")
 
@@ -263,13 +269,17 @@ def _evaluate_class(
         plot_dir / f"{class_name}_dist.png",
     )
 
-    # ── Heatmap visualisations ────────────────────────────────────────────────
+    # ── Heatmap visualisations (normalised to match submission) ──────────────
+    _lo = np.percentile(sh_scores[:n_good].flatten(), P_LO)
+    _hi = np.percentile(sh_scores[:n_good].flatten(), P_HI)
+    vis_scores = np.clip((ens_scores - _lo) / (_hi - _lo + 1e-8), 0, 1).astype(np.float32)
     _save_heatmaps(
         val_items,
         ens_scores[n_good:],
         class_name,
         plot_dir / f"{class_name}_heatmaps.png",
         n=n_vis,
+        vis_scores=vis_scores[n_good:],
     )
 
     metrics = {

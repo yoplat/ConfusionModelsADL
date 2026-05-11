@@ -15,9 +15,22 @@ import torch
 warnings.filterwarnings("ignore", message="xFormers is not available")
 
 from src.config import (
+    BATCH_SIZE,
+    BLUR_SIGMA,
     CORESET_RATIO,
     EPOCHS,
+    FEATURE_DIM,
+    IMG_SIZE,
+    LAYERS_TO_USE,
+    LR,
+    MULTILAYER_DIM,
+    PATCH_GRID,
     PATIENCE,
+    P_GOOD,
+    P_HI,
+    P_LO,
+    P_REAL,
+    SAMPLES_PER_EPOCH,
     SEED,
     W_MB,
     device,
@@ -163,8 +176,24 @@ def main() -> None:
     # ── Checkpoint (timestamped, includes evaluation artefacts) ──────────────
     config_dict = {
         "seed": args.seed,
+        "img_size": IMG_SIZE,
+        "patch_grid": PATCH_GRID,
+        "feature_dim": FEATURE_DIM,
+        "layers_to_use": LAYERS_TO_USE,
+        "multilayer_dim": MULTILAYER_DIM,
         "coreset_ratio": args.coreset_ratio,
+        "coreset_method": args.coreset_method,
         "epochs": args.epochs,
+        "patience": args.patience,
+        "samples_per_epoch": SAMPLES_PER_EPOCH,
+        "batch_size": BATCH_SIZE,
+        "lr": LR,
+        "w_mb": W_MB,
+        "blur_sigma": BLUR_SIGMA,
+        "p_good": P_GOOD,
+        "p_real": P_REAL,
+        "p_lo": P_LO,
+        "p_hi": P_HI,
         "data_root": str(args.data_root),
     }
     run_dir = save_run(
