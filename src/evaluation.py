@@ -154,8 +154,14 @@ def _save_heatmaps(
 
     order = np.argsort([s.max() for s in ens_scores])[::-1][:n]
 
-    cols = ["Original", "GT Mask", "Raw Score", "Norm Score", "Overlay"] if vis_scores is not None else ["Original", "GT Mask", "Score Map", "Overlay"]
-    fig, axes = plt.subplots(n, len(cols), figsize=(3.5 * len(cols), 3.5 * n), squeeze=False)
+    cols = (
+        ["Original", "GT Mask", "Raw Score", "Norm Score", "Overlay"]
+        if vis_scores is not None
+        else ["Original", "GT Mask", "Score Map", "Overlay"]
+    )
+    fig, axes = plt.subplots(
+        n, len(cols), figsize=(3.5 * len(cols), 3.5 * n), squeeze=False
+    )
     for col, title in enumerate(cols):
         axes[0, col].set_title(title, fontsize=10)
 
@@ -178,11 +184,62 @@ def _save_heatmaps(
             axes[row, 4].imshow(vs, cmap="hot", alpha=0.55, vmin=0, vmax=1)
         else:
             axes[row, 3].imshow(img)
-            axes[row, 3].imshow(score, cmap="hot", alpha=0.55, vmin=0, vmax=score.max() + 1e-8)
+            axes[row, 3].imshow(
+                score, cmap="hot", alpha=0.55, vmin=0, vmax=score.max() + 1e-8
+            )
         for ax in axes[row]:
             ax.axis("off")
 
     fig.suptitle(f"Top anomaly heatmaps — {class_name}", y=1.01)
+    plt.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _collect_zeromask_paths(data_root: Path, class_name: str) -> list[str]:
+    """Return paths to anomaly images whose GT mask is entirely black."""
+    paths = []
+    gt_dir = data_root / class_name / "ground_truth_train"
+    train_dir = data_root / class_name / "train"
+    if not gt_dir.is_dir():
+        return paths
+    for ano_gt_dir in sorted(gt_dir.iterdir()):
+        ano_img_dir = train_dir / ano_gt_dir.name
+        for mask_path in sorted(ano_gt_dir.glob("*.png")):
+            if np.array(Image.open(mask_path).convert("L")).max() == 0:
+                img_path = ano_img_dir / mask_path.name
+                if img_path.exists():
+                    paths.append(str(img_path))
+    return paths
+
+
+def _save_score_heatmaps(
+    paths: list[str],
+    scores: np.ndarray,
+    title: str,
+    save_path: Path,
+    n: int = 4,
+) -> None:
+    """Grid of (original | score map | overlay) sorted by highest score, no GT mask."""
+    n = min(n, len(paths))
+    if n == 0:
+        return
+    order = np.argsort([s.max() for s in scores])[::-1][:n]
+    fig, axes = plt.subplots(n, 3, figsize=(10.5, 3.5 * n), squeeze=False)
+    for col, t in enumerate(["Original", "Score Map", "Overlay"]):
+        axes[0, col].set_title(t, fontsize=10)
+    for row, idx in enumerate(order):
+        score = scores[idx]
+        img = np.array(
+            Image.open(paths[idx]).convert("RGB").resize((IMG_SIZE, IMG_SIZE))
+        )
+        axes[row, 0].imshow(img)
+        axes[row, 1].imshow(score, cmap="hot", vmin=0, vmax=1)
+        axes[row, 2].imshow(img)
+        axes[row, 2].imshow(score, cmap="hot", alpha=0.55, vmin=0, vmax=1)
+        for ax in axes[row]:
+            ax.axis("off")
+    fig.suptitle(title, y=1.01)
     plt.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -233,13 +290,17 @@ def _evaluate_class(
     # ── Raw inference scores ──────────────────────────────────────────────────
     sh_scores, _ = seghead_infer(model, all_paths, seg_heads[class_name])
     if W_MB > 0:
-        mb_scores, _ = memorybank_infer(model, all_paths, memory_banks[class_name])
+        mb_scores, _ = memorybank_infer(
+            model, all_paths, memory_banks[class_name]
+        )
         ens_scores = W_MB * mb_scores + W_SH * sh_scores
     else:
         mb_scores = None
         ens_scores = sh_scores.copy()
     if BLUR_SIGMA > 0:
-        ens_scores = np.stack([gaussian_filter(s, sigma=BLUR_SIGMA) for s in ens_scores])
+        ens_scores = np.stack(
+            [gaussian_filter(s, sigma=BLUR_SIGMA) for s in ens_scores]
+        )
 
     # ── Ground-truth pixel masks ──────────────────────────────────────────────
     zero = np.zeros((IMG_SIZE, IMG_SIZE), dtype=np.uint8)
@@ -250,10 +311,15 @@ def _evaluate_class(
         return {}
 
     # ── Pixel-level AUROC ─────────────────────────────────────────────────────
-    score_dict = {"SegHead": sh_scores.flatten(), "Ensemble": ens_scores.flatten()}
+    score_dict = {
+        "SegHead": sh_scores.flatten(),
+        "Ensemble": ens_scores.flatten(),
+    }
     if mb_scores is not None:
         score_dict["Memory Bank"] = mb_scores.flatten()
-    aucs = _save_roc_curve(gt_flat, score_dict, class_name, plot_dir / f"{class_name}_roc.png")
+    aucs = _save_roc_curve(
+        gt_flat, score_dict, class_name, plot_dir / f"{class_name}_roc.png"
+    )
 
     # ── Image-level AUROC ─────────────────────────────────────────────────────
     image_scores = ens_scores.reshape(len(all_paths), -1).max(axis=1)
@@ -272,7 +338,9 @@ def _evaluate_class(
     # ── Heatmap visualisations (normalised to match submission) ──────────────
     _lo = np.percentile(sh_scores[:n_good].flatten(), P_LO)
     _hi = np.percentile(sh_scores[:n_good].flatten(), P_HI)
-    vis_scores = np.clip((ens_scores - _lo) / (_hi - _lo + 1e-8), 0, 1).astype(np.float32)
+    vis_scores = np.clip((ens_scores - _lo) / (_hi - _lo + 1e-8), 0, 1).astype(
+        np.float32
+    )
     _save_heatmaps(
         val_items,
         ens_scores[n_good:],
@@ -281,6 +349,34 @@ def _evaluate_class(
         n=n_vis,
         vis_scores=vis_scores[n_good:],
     )
+
+    # Good images — highest scorers are the worst false positives
+    _save_score_heatmaps(
+        good_paths,
+        vis_scores[:n_good],
+        f"Top false positives (good images) — {class_name}",
+        plot_dir / f"{class_name}_good_heatmaps.png",
+        n=n_vis,
+    )
+
+    # Anomaly images with no pixel annotation (all-black mask)
+    zm_paths = _collect_zeromask_paths(data_root, class_name)
+    if zm_paths:
+        zm_sh, _ = seghead_infer(model, zm_paths, seg_heads[class_name])
+        if BLUR_SIGMA > 0:
+            zm_sh = np.stack(
+                [gaussian_filter(s, sigma=BLUR_SIGMA) for s in zm_sh]
+            )
+        zm_vis = np.clip((zm_sh - _lo) / (_hi - _lo + 1e-8), 0, 1).astype(
+            np.float32
+        )
+        _save_score_heatmaps(
+            zm_paths,
+            zm_vis,
+            f"Zero-mask anomalies (no pixel GT) — {class_name}",
+            plot_dir / f"{class_name}_zeromask_heatmaps.png",
+            n=n_vis,
+        )
 
     metrics = {
         "pixel_auroc_sh": aucs["SegHead"],
@@ -370,7 +466,12 @@ def evaluate_all(
         print(row)
 
     if all_metrics:
-        keys = ["pixel_auroc_sh", "pixel_auroc_ens", "image_auroc_ens", "avg_precision_ens"]
+        keys = [
+            "pixel_auroc_sh",
+            "pixel_auroc_ens",
+            "image_auroc_ens",
+            "avg_precision_ens",
+        ]
         if use_mb:
             keys = ["pixel_auroc_mb"] + keys
         means = {

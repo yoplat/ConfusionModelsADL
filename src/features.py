@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 
-from .config import FEATURE_DIM, LAYERS_TO_USE, device, worker_init_fn
+from .config import FEATURE_DIM, LAYERS_TO_USE, NUM_WORKERS, device, worker_init_fn
 from .datasets import ImageFolderDataset, preprocess
 
 
@@ -48,7 +48,7 @@ def extract_patch_features(
     loader = DataLoader(
         ImageFolderDataset(paths, preprocess),
         batch_size=batch_size,
-        num_workers=2,
+        num_workers=NUM_WORKERS,
         pin_memory=True,
         generator=g,
         worker_init_fn=worker_init_fn,
@@ -57,4 +57,5 @@ def extract_patch_features(
     for batch in loader:
         out = model.forward_features(batch.to(device, non_blocking=True))
         feats.append(out["x_norm_patchtokens"].reshape(-1, FEATURE_DIM).cpu())
+        del out
     return torch.cat(feats, dim=0)

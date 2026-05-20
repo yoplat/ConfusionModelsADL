@@ -16,6 +16,7 @@ from .config import (
     EPOCHS,
     IMG_SIZE,
     LR,
+    NUM_WORKERS,
     PATIENCE,
     SAMPLES_PER_EPOCH,
     SEED,
@@ -128,15 +129,17 @@ def _val_pixel_ap(model, head, val_items: list[dict]) -> float:
     from .features import extract_multilayer_patches
 
     head.eval()
+    imgs = torch.stack([
+        preprocess(Image.open(item["path"]).convert("RGB"))
+        for item in val_items
+    ]).to(device)
+    patches = extract_multilayer_patches(model, imgs)
+    del imgs
+    scores = torch.sigmoid(head(patches)).squeeze(1).cpu().numpy()
+    del patches
+
     all_preds, all_gt = [], []
-    for item in val_items:
-        img = (
-            preprocess(Image.open(item["path"]).convert("RGB"))
-            .unsqueeze(0)
-            .to(device)
-        )
-        patches = extract_multilayer_patches(model, img)
-        score = torch.sigmoid(head(patches)).squeeze().cpu().numpy()
+    for score, item in zip(scores, val_items):
         mask = (item["mask"] > 0).astype(np.uint8)
         if mask.shape != (IMG_SIZE, IMG_SIZE):
             mask = (
@@ -202,7 +205,7 @@ def train_seg_heads(
                 good_paths, sources, SAMPLES_PER_EPOCH, preprocess
             ),
             batch_size=BATCH_SIZE,
-            num_workers=8,
+            num_workers=NUM_WORKERS,
             pin_memory=True,
             generator=g,
             worker_init_fn=worker_init_fn,
@@ -221,10 +224,10 @@ def train_seg_heads(
             for imgs, masks in loader:
                 imgs = imgs.to(device, non_blocking=True)
                 masks = masks.to(device, non_blocking=True).unsqueeze(1)
+                optim.zero_grad(set_to_none=True)
                 with torch.no_grad():
                     patches = extract_multilayer_patches(model, imgs)
                 loss = bce_dice_loss(head(patches), masks)
-                optim.zero_grad()
                 loss.backward()
                 optim.step()
                 epoch_loss += loss.item()
@@ -263,4 +266,8 @@ def train_seg_heads(
             if class_val
             else f"  {class_name} done"
         )
+        del loader, optim
+        gc.collect()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
     return seg_heads

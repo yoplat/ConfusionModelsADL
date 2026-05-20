@@ -28,7 +28,12 @@ warnings.filterwarnings("ignore", message="xFormers is not available")
 
 from src.checkpoint import load_run
 from src.config import BLUR_SIGMA, IMG_SIZE, P_HI, P_LO, SEED, W_MB, device
-from src.evaluation import _resize_mask, _save_heatmaps
+from src.evaluation import (
+    _collect_zeromask_paths,
+    _resize_mask,
+    _save_heatmaps,
+    _save_score_heatmaps,
+)
 from src.inference import seghead_infer
 from src.submission import float_matrix_to_q8rle
 from src.training import collect_anomaly_sources
@@ -152,15 +157,14 @@ def main() -> None:
     norm_val: dict[str, list[np.ndarray]] = {}
     good_acc: dict[str, np.ndarray] = {}
     good_count: dict[str, int] = {}
+    zeromask_acc: dict[str, np.ndarray] = {}
+    zeromask_count: dict[str, int] = {}
+    good_paths_per_cls: dict[str, list[str]] = {}
+    zeromask_paths_per_cls: dict[str, list[str]] = {}
     test_filenames: dict[str, list[str]] = {}
     class_names: list[str] | None = None
 
     for run_dir in run_dirs:
-        cfg = _load_config(run_dir)
-        p_lo = cfg.get("p_lo", P_LO)
-        p_hi = cfg.get("p_hi", P_HI)
-        blur = cfg.get("blur_sigma", BLUR_SIGMA)
-
         _, seg_heads = load_run(run_dir)
         if class_names is None:
             class_names = sorted(seg_heads.keys())
@@ -177,16 +181,16 @@ def main() -> None:
             sh_good, _ = seghead_infer(dinov2, good_paths, seg_heads[cls])
             sh_test, fns = seghead_infer(dinov2, test_paths, seg_heads[cls])
 
-            lo = np.percentile(sh_good.flatten(), p_lo)
-            hi = np.percentile(sh_good.flatten(), p_hi)
+            # Always use global P_LO/P_HI/BLUR_SIGMA so all runs are
+            # normalised in the same space before combining.
+            lo = np.percentile(sh_good.flatten(), P_LO)
+            hi = np.percentile(sh_good.flatten(), P_HI)
 
             def _norm_and_blur(scores: np.ndarray) -> np.ndarray:
-                n = np.clip((scores - lo) / (hi - lo + 1e-8), 0, 1).astype(
-                    np.float32
-                )
+                n = np.clip((scores - lo) / (hi - lo + 1e-8), 0, 1).astype(np.float32)
                 return (
-                    np.stack([gaussian_filter(s, sigma=blur) for s in n])
-                    if blur > 0
+                    np.stack([gaussian_filter(s, sigma=BLUR_SIGMA) for s in n])
+                    if BLUR_SIGMA > 0
                     else n
                 )
 
@@ -198,6 +202,7 @@ def main() -> None:
             if cls not in good_acc:
                 good_acc[cls] = normed_good.astype(np.float64)
                 good_count[cls] = 1
+                good_paths_per_cls[cls] = good_paths
             else:
                 good_acc[cls] += normed_good
                 good_count[cls] += 1
@@ -205,6 +210,19 @@ def main() -> None:
             if val_paths:
                 sh_val, _ = seghead_infer(dinov2, val_paths, seg_heads[cls])
                 norm_val.setdefault(cls, []).append(_norm_and_blur(sh_val))
+
+            if cls not in zeromask_paths_per_cls:
+                zeromask_paths_per_cls[cls] = _collect_zeromask_paths(args.data_root, cls)
+            zm_paths = zeromask_paths_per_cls[cls]
+            if zm_paths:
+                zm_sh, _ = seghead_infer(dinov2, zm_paths, seg_heads[cls])
+                normed_zm = _norm_and_blur(zm_sh)
+                if cls not in zeromask_acc:
+                    zeromask_acc[cls] = normed_zm.astype(np.float64)
+                    zeromask_count[cls] = 1
+                else:
+                    zeromask_acc[cls] += normed_zm
+                    zeromask_count[cls] += 1
 
             print(f"  {cls} done")
 
@@ -289,6 +307,25 @@ def main() -> None:
             plot_dir / f"{cls}_heatmaps.png",
             n=args.n_vis,
         )
+
+        _save_score_heatmaps(
+            good_paths_per_cls[cls],
+            combined_good,
+            f"Top false positives (good images) — {cls}",
+            plot_dir / f"{cls}_good_heatmaps.png",
+            n=args.n_vis,
+        )
+
+        zm_paths = zeromask_paths_per_cls.get(cls, [])
+        if zm_paths and cls in zeromask_acc:
+            combined_zm = np.clip(zeromask_acc[cls] / zeromask_count[cls], 0, 1).astype(np.float32)
+            _save_score_heatmaps(
+                zm_paths,
+                combined_zm,
+                f"Zero-mask anomalies (no pixel GT) — {cls}",
+                plot_dir / f"{cls}_zeromask_heatmaps.png",
+                n=args.n_vis,
+            )
 
     if all_ap:
         mean_ap = float(np.mean(list(all_ap.values())))

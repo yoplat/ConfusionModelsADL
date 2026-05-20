@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 from tqdm import tqdm
 
-from .config import IMG_SIZE, PATCH_GRID, SEED, W_MB, device, worker_init_fn
+from .config import IMG_SIZE, NUM_WORKERS, PATCH_GRID, SEED, W_MB, device, worker_init_fn
 from .datasets import TestDataset, preprocess
 from .features import extract_multilayer_patches
 from .model import SegHead
@@ -43,7 +43,7 @@ def memorybank_infer(
     loader = DataLoader(
         TestDataset(paths, preprocess),
         batch_size=batch_size,
-        num_workers=2,
+        num_workers=NUM_WORKERS,
         pin_memory=True,
         generator=g,
         worker_init_fn=worker_init_fn,
@@ -54,6 +54,7 @@ def memorybank_infer(
         imgs = imgs.to(device, non_blocking=True)
         out = model.forward_features(imgs)
         patches = F.normalize(out["x_norm_patchtokens"], p=2, dim=2)
+        del out
         max_sim, _ = (patches @ bank_gpu.T).max(dim=2)
         dist = (1.0 - max_sim).reshape(-1, PATCH_GRID, PATCH_GRID)
         s = F.interpolate(
@@ -98,7 +99,7 @@ def seghead_infer(
     loader = DataLoader(
         TestDataset(paths, preprocess),
         batch_size=batch_size,
-        num_workers=2,
+        num_workers=NUM_WORKERS,
         pin_memory=True,
         generator=g,
         worker_init_fn=worker_init_fn,

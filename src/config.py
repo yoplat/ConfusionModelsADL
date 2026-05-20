@@ -3,6 +3,7 @@ import numpy as np
 import torch
 
 SEED = 42
+NUM_WORKERS = 8
 IMG_SIZE = 224
 PATCH_GRID = 16
 FEATURE_DIM = 384
