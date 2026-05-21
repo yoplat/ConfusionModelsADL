@@ -70,8 +70,12 @@ def load_run(
     for cls, paths in sorted(by_class.items()):
         heads = []
         for pt in sorted(paths):
-            head = SegHead()
-            head.load_state_dict(torch.load(pt, map_location=device, weights_only=True))
+            state = torch.load(pt, map_location=device, weights_only=True)
+            # Infer in_dim from the saved weights so old (ViT-S) and new (ViT-B)
+            # checkpoints both load correctly regardless of the current config.
+            in_dim = state["conv1.weight"].shape[1]
+            head = SegHead(in_dim=in_dim)
+            head.load_state_dict(state)
             heads.append(head.to(device).eval())
         seg_heads[cls] = heads
 

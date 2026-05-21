@@ -43,6 +43,21 @@ OUTPUT_DIR = Path(__file__).parent / "output"
 RUNS_DIR = OUTPUT_DIR / "runs"
 
 
+def _infer_multilayer_dim(run_dir: Path) -> int:
+    """Read in_dim from the first checkpoint in a run without loading the full model."""
+    pts = sorted((run_dir / "seg_heads").glob("*.pt"))
+    if not pts:
+        raise FileNotFoundError(f"No .pt files in {run_dir / 'seg_heads'}")
+    state = torch.load(pts[0], map_location="cpu", weights_only=True)
+    return int(state["conv1.weight"].shape[1])
+
+
+_BACKBONE_FOR_DIM = {
+    1152: "dinov2_vits14_reg",  # ViT-S/14 @ 224px, 3 layers × 384
+    2304: "dinov2_vitb14_reg",  # ViT-B/14 @ 224px, 3 layers × 768
+}
+
+
 def _get_top_runs(n: int) -> list[Path]:
     """Return the top-N run dirs ranked by mean val avg_precision_ens."""
     scored = []
@@ -137,10 +152,24 @@ def main() -> None:
     if not run_dirs:
         raise SystemExit("No valid run directories found.")
 
+    # ── Detect backbone from checkpoints; verify all runs match ───────────────
+    dims = {rd: _infer_multilayer_dim(rd) for rd in run_dirs}
+    unique_dims = set(dims.values())
+    if len(unique_dims) > 1:
+        detail = "\n".join(f"  {rd.name}: in_dim={d}" for rd, d in dims.items())
+        raise SystemExit(
+            f"Runs have incompatible SegHead input dimensions:\n{detail}\n"
+            "Only runs trained with the same backbone can be ensembled."
+        )
+    multilayer_dim = unique_dims.pop()
+    backbone_name = _BACKBONE_FOR_DIM.get(multilayer_dim)
+    if backbone_name is None:
+        raise SystemExit(f"Unknown multilayer_dim={multilayer_dim}; add it to _BACKBONE_FOR_DIM.")
+
     # ── Load DINOv2 backbone (shared across all runs) ─────────────────────────
-    print("\nLoading DINOv2...")
+    print(f"\nLoading {backbone_name} (in_dim={multilayer_dim})...")
     dinov2 = torch.hub.load(
-        "facebookresearch/dinov2", "dinov2_vitb14_reg", verbose=False
+        "facebookresearch/dinov2", backbone_name, verbose=False
     )
     dinov2 = dinov2.to(device).eval()
     for p in dinov2.parameters():
