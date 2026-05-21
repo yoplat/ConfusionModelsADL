@@ -8,7 +8,7 @@ from .config import IMG_SIZE, MULTILAYER_DIM, PATCH_GRID, TVERSKY_ALPHA
 class SegHead(nn.Module):
     """Pixel-wise anomaly segmentation head operating on concatenated ViT patch tokens."""
 
-    def __init__(self, in_dim: int = MULTILAYER_DIM, hidden: int = 128):
+    def __init__(self, in_dim: int = MULTILAYER_DIM, hidden: int = 256):
         super().__init__()
         self.conv1 = nn.Conv2d(in_dim, hidden, 1)
         self.bn1 = nn.BatchNorm2d(hidden)

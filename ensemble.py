@@ -140,7 +140,7 @@ def main() -> None:
     # ── Load DINOv2 backbone (shared across all runs) ─────────────────────────
     print("\nLoading DINOv2...")
     dinov2 = torch.hub.load(
-        "facebookresearch/dinov2", "dinov2_vits14", verbose=False
+        "facebookresearch/dinov2", "dinov2_vitb14_reg", verbose=False
     )
     dinov2 = dinov2.to(device).eval()
     for p in dinov2.parameters():

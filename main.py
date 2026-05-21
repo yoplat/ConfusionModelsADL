@@ -60,7 +60,7 @@ def main() -> None:
 
     # ── Backbone ──────────────────────────────────────────────────────────────
     print("\nLoading DINOv2...")
-    dinov2 = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14", verbose=False)
+    dinov2 = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14_reg", verbose=False)
     dinov2 = dinov2.to(device).eval()
     for p in dinov2.parameters():
         p.requires_grad = False
