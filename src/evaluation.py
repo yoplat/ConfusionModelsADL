@@ -22,7 +22,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from .config import BLUR_SIGMA, IMG_SIZE, P_HI, P_LO, W_MB
+from .config import IMG_SIZE, W_MB
 from .inference import ensemble_infer, memorybank_infer, seghead_infer
 
 
@@ -294,9 +294,9 @@ def _evaluate_class(
     n_good = len(good_paths)
 
     # ── Raw inference scores ──────────────────────────────────────────────────
+    # ensemble_infer returns scores already normalised [0,1] and blurred.
     heads = seg_heads[class_name]
     if isinstance(heads, list):
-        # Multi-head: use normalised ensemble on good_paths for normalisation reference
         sh_scores, _ = ensemble_infer(model, all_paths, heads, good_paths)
     else:
         sh_scores, _ = seghead_infer(model, all_paths, heads)
@@ -308,10 +308,6 @@ def _evaluate_class(
     else:
         mb_scores = None
         ens_scores = sh_scores.copy()
-    if BLUR_SIGMA > 0:
-        ens_scores = np.stack(
-            [gaussian_filter(s, sigma=BLUR_SIGMA) for s in ens_scores]
-        )
 
     # ── Ground-truth pixel masks ──────────────────────────────────────────────
     zero = np.zeros((IMG_SIZE, IMG_SIZE), dtype=np.uint8)
@@ -346,12 +342,8 @@ def _evaluate_class(
         plot_dir / f"{class_name}_dist.png",
     )
 
-    # ── Heatmap visualisations (normalised to match submission) ──────────────
-    _lo = np.percentile(sh_scores[:n_good].flatten(), P_LO)
-    _hi = np.percentile(sh_scores[:n_good].flatten(), P_HI)
-    vis_scores = np.clip((ens_scores - _lo) / (_hi - _lo + 1e-8), 0, 1).astype(
-        np.float32
-    )
+    # ── Heatmap visualisations (already normalised by ensemble_infer) ────────
+    vis_scores = ens_scores
     _save_heatmaps(
         val_items,
         ens_scores[n_good:],
@@ -377,13 +369,7 @@ def _evaluate_class(
             zm_sh, _ = ensemble_infer(model, zm_paths, heads, good_paths)
         else:
             zm_sh, _ = seghead_infer(model, zm_paths, heads)
-        if BLUR_SIGMA > 0:
-            zm_sh = np.stack(
-                [gaussian_filter(s, sigma=BLUR_SIGMA) for s in zm_sh]
-            )
-        zm_vis = np.clip((zm_sh - _lo) / (_hi - _lo + 1e-8), 0, 1).astype(
-            np.float32
-        )
+        zm_vis = zm_sh
         _save_score_heatmaps(
             zm_paths,
             zm_vis,

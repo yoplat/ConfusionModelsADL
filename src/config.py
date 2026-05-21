@@ -2,7 +2,7 @@ import random
 import numpy as np
 import torch
 
-SEED = 42
+SEED = 567
 NUM_WORKERS = 8
 IMG_SIZE = 224
 PATCH_GRID = 16
@@ -13,7 +13,7 @@ CORESET_RATIO = (
     0.01  # fraction of patches kept in the memory bank (greedy k-center)
 )
 EPOCHS = 500
-PATIENCE = 5  # early-stopping patience in epochs
+PATIENCE = 15  # early-stopping patience in epochs
 SAMPLES_PER_EPOCH = 200  # number of synthetic images at each epoch
 BATCH_SIZE = 128
 LR = 1e-3
@@ -21,7 +21,7 @@ W_MB = 0.0  # memory-bank weight; seg-head weight = 1 - W_MB
 BLUR_SIGMA = 0  # Gaussian blur sigma applied to the ensemble score map
 
 # SegHead training data mix
-P_GOOD = 0.40  # fraction of batches that are clean good images
+P_GOOD = 0.60  # fraction of batches that are clean good images
 P_REAL = 0.30  # fraction that are real training-split anomalies (with GT mask)
 # remaining 0.30 → cut-paste synthetic anomalies
 
@@ -34,18 +34,18 @@ TOP_K = 5  # best models to keep per class
 
 # Per-class overrides (L1 regularisation, data mix)
 CLASS_CONFIG: dict = {
-    "class_01": {"l1": 0.2, "p_good": 0.40, "p_real": 0.30},
-    "class_02": {"l1": 0.2, "p_good": 0.40, "p_real": 0.30},
-    "class_03": {"l1": 0.2, "p_good": 0.40, "p_real": 0.30},
-    "class_04": {"l1": 0.2, "p_good": 0.40, "p_real": 0.30},
-    "class_05": {"l1": 0.2, "p_good": 0.40, "p_real": 0.30},
-    "class_06": {"l1": 0.2, "p_good": 0.40, "p_real": 0.30},
-    "class_07": {"l1": 0.2, "p_good": 0.40, "p_real": 0.30},
-    "class_08": {"l1": 0.2, "p_good": 0.40, "p_real": 0.30},
+    "class_01": {"l1": 0.2, "p_good": 0.60, "p_real": 0.30},
+    "class_02": {"l1": 0.2, "p_good": 0.60, "p_real": 0.30},
+    "class_03": {"l1": 0.2, "p_good": 0.60, "p_real": 0.30},
+    "class_04": {"l1": 0.2, "p_good": 0.60, "p_real": 0.30},
+    "class_05": {"l1": 0.2, "p_good": 0.60, "p_real": 0.30},
+    "class_06": {"l1": 0.2, "p_good": 0.60, "p_real": 0.30},
+    "class_07": {"l1": 0.2, "p_good": 0.60, "p_real": 0.30},
+    "class_08": {"l1": 0.2, "p_good": 0.60, "p_real": 0.30},
 }
 
 # Score normalisation percentiles
-P_LO = 50.0
+P_LO = 0.0
 P_HI = 99.999
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
