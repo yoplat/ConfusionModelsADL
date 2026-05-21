@@ -57,24 +57,26 @@ def _resize_mask(mask: np.ndarray) -> np.ndarray:
 
 
 class TrainSynthDataset(Dataset):
-    """30 % good / 40 % real anomaly / 30 % cut-paste synthetic anomaly.
+    """p_good % good / p_real % real anomaly / remaining % cut-paste synthetic.
 
-    Real anomaly samples are training-split images with their GT masks resized
-    to IMG_SIZE. Cut-paste samples paste an anomaly crop onto a good image.
-    Falls back to 50/50 good/synth when no anomaly sources are available.
+    ``train_sources`` feed the real-anomaly branch; ``cutpaste_sources`` feed
+    the cut-paste branch.  The two lists can differ: v16 includes val images in
+    the cut-paste donor pool but not in the direct-supervision branch.
     """
 
     def __init__(
         self,
         good_paths: list[str],
-        sources: list[dict],
+        train_sources: list[dict],
+        cutpaste_sources: list[dict],
         n: int,
         tf,
         p_good: float = P_GOOD,
         p_real: float = P_REAL,
     ):
         self.good_paths = good_paths
-        self.sources = sources
+        self.train_sources = train_sources
+        self.cutpaste_sources = cutpaste_sources
         self.n = n
         self.tf = tf
         self.p_good = p_good
@@ -86,16 +88,16 @@ class TrainSynthDataset(Dataset):
     def __getitem__(self, i):
         r = random.random()
 
-        if r < self.p_good or not self.sources:
+        if r < self.p_good or not self.train_sources:
             img = np.array(Image.open(random.choice(self.good_paths)).convert("RGB"))
             return self.tf(Image.fromarray(img)), torch.zeros(IMG_SIZE, IMG_SIZE)
 
         if r < self.p_good + self.p_real:
-            src = random.choice(self.sources)
+            src = random.choice(self.train_sources)
             mask = _resize_mask(src["mask"])
             return self.tf(Image.fromarray(src["image"])), torch.from_numpy(mask).float()
 
         good_img = np.array(Image.open(random.choice(self.good_paths)).convert("RGB"))
-        src = random.choice(self.sources)
+        src = random.choice(self.cutpaste_sources)
         synth, mask = cut_paste(good_img, src["image"], src["mask"])
         return self.tf(Image.fromarray(synth)), torch.from_numpy(mask).float()

@@ -23,7 +23,7 @@ from sklearn.metrics import (
 )
 
 from .config import BLUR_SIGMA, IMG_SIZE, P_HI, P_LO, W_MB
-from .inference import memorybank_infer, seghead_infer
+from .inference import ensemble_infer, memorybank_infer, seghead_infer
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
@@ -117,9 +117,15 @@ def _save_score_dist(
         class_name:  Used in the plot title.
         save_path:   Output PNG path.
     """
+    def _safe_hist(ax, scores, bins, **kwargs):
+        if len(scores) > 0 and np.ptp(scores) > 0:
+            ax.hist(scores, bins=min(bins, len(scores)), **kwargs)
+        elif len(scores) > 0:
+            ax.axvline(float(scores[0]), lw=2, **{k: v for k, v in kwargs.items() if k != "alpha"})
+
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(good_scores, bins=30, alpha=0.6, color="steelblue", label="Good")
-    ax.hist(ano_scores, bins=30, alpha=0.6, color="crimson", label="Anomaly")
+    _safe_hist(ax, good_scores, 30, alpha=0.6, color="steelblue", label="Good")
+    _safe_hist(ax, ano_scores,  30, alpha=0.6, color="crimson",   label="Anomaly")
     ax.set_xlabel("Max pixel score (ensemble)")
     ax.set_ylabel("Count")
     ax.set_title(f"Image-level score distribution — {class_name}")
@@ -288,7 +294,12 @@ def _evaluate_class(
     n_good = len(good_paths)
 
     # ── Raw inference scores ──────────────────────────────────────────────────
-    sh_scores, _ = seghead_infer(model, all_paths, seg_heads[class_name])
+    heads = seg_heads[class_name]
+    if isinstance(heads, list):
+        # Multi-head: use normalised ensemble on good_paths for normalisation reference
+        sh_scores, _ = ensemble_infer(model, all_paths, heads, good_paths)
+    else:
+        sh_scores, _ = seghead_infer(model, all_paths, heads)
     if W_MB > 0:
         mb_scores, _ = memorybank_infer(
             model, all_paths, memory_banks[class_name]
@@ -362,7 +373,10 @@ def _evaluate_class(
     # Anomaly images with no pixel annotation (all-black mask)
     zm_paths = _collect_zeromask_paths(data_root, class_name)
     if zm_paths:
-        zm_sh, _ = seghead_infer(model, zm_paths, seg_heads[class_name])
+        if isinstance(heads, list):
+            zm_sh, _ = ensemble_infer(model, zm_paths, heads, good_paths)
+        else:
+            zm_sh, _ = seghead_infer(model, zm_paths, heads)
         if BLUR_SIGMA > 0:
             zm_sh = np.stack(
                 [gaussian_filter(s, sigma=BLUR_SIGMA) for s in zm_sh]

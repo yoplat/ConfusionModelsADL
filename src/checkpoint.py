@@ -1,57 +1,39 @@
 import json
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
 import torch
 
-from .model import SegHead
 from .config import device
+from .model import SegHead
 
 
 def save_run(
     output_dir: Path,
-    memory_banks: dict[str, torch.Tensor],
-    seg_heads: dict[str, SegHead],
+    seg_heads_dict: dict[str, list[SegHead]],
     config_dict: dict,
     metrics: dict | None = None,
 ) -> Path:
-    """Save a complete model run to a timestamped directory.
+    """Save TOP_K SegHeads per class to a timestamped directory.
 
-    Directory layout::
+    Layout::
 
-        output_dir/
-          runs/
-            YYYYMMDD_HHMMSS/
-              config.json
-              memory_banks/
-                class_01.pt
+        output_dir/runs/YYYYMMDD_HHMMSS/
+            config.json
+            seg_heads/
+                class_01_rank1.pt
+                class_01_rank2.pt
                 ...
-              seg_heads/
-                class_01.pt
-                ...
-              evaluation/
-                metrics.json  (copied here for convenience, if provided)
-
-    Args:
-        output_dir:   Root output directory.
-        memory_banks: Per-class normalised coreset tensors.
-        seg_heads:    Per-class trained SegHead models.
-        config_dict:  Hyper-parameter dict serialised to config.json.
-        metrics:      Optional evaluation metrics dict.
-
-    Returns:
-        Path to the created run directory.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = output_dir / "runs" / timestamp
-    (run_dir / "memory_banks").mkdir(parents=True, exist_ok=True)
     (run_dir / "seg_heads").mkdir(parents=True, exist_ok=True)
 
-    for cls, bank in memory_banks.items():
-        torch.save(bank, run_dir / "memory_banks" / f"{cls}.pt")
-
-    for cls, head in seg_heads.items():
-        torch.save(head.state_dict(), run_dir / "seg_heads" / f"{cls}.pt")
+    for cls, heads in seg_heads_dict.items():
+        heads_list = heads if isinstance(heads, list) else [heads]
+        for rank, head in enumerate(heads_list):
+            torch.save(head.state_dict(), run_dir / "seg_heads" / f"{cls}_rank{rank + 1}.pt")
 
     with open(run_dir / "config.json", "w") as f:
         json.dump(config_dict, f, indent=2)
@@ -68,24 +50,29 @@ def save_run(
 
 def load_run(
     run_dir: Path,
-) -> tuple[dict[str, torch.Tensor], dict[str, SegHead]]:
-    """Restore memory banks and SegHeads from a saved run directory.
+) -> tuple[dict, dict[str, list[SegHead]]]:
+    """Load SegHeads from a saved run.
 
-    Args:
-        run_dir: Path returned by :func:`save_run`.
+    Handles both old format (``class_01.pt``) and new format
+    (``class_01_rank1.pt``).  Always returns a list of heads per class
+    (old format becomes a single-element list).
 
     Returns:
-        memory_banks: dict class_name -> coreset tensor (on ``device``).
-        seg_heads:    dict class_name -> SegHead (eval mode, on ``device``).
+        memory_banks: Empty dict (W_MB=0 by default; old banks ignored).
+        seg_heads:    dict class_name -> list of SegHeads (eval mode, on device).
     """
-    memory_banks: dict[str, torch.Tensor] = {}
-    for pt in sorted((run_dir / "memory_banks").glob("*.pt")):
-        memory_banks[pt.stem] = torch.load(pt, map_location=device)
-
-    seg_heads: dict[str, SegHead] = {}
+    by_class: dict[str, list[Path]] = defaultdict(list)
     for pt in sorted((run_dir / "seg_heads").glob("*.pt")):
-        head = SegHead()
-        head.load_state_dict(torch.load(pt, map_location=device))
-        seg_heads[pt.stem] = head.to(device).eval()
+        cls = pt.stem.rsplit("_rank", 1)[0] if "_rank" in pt.stem else pt.stem
+        by_class[cls].append(pt)
 
-    return memory_banks, seg_heads
+    seg_heads: dict[str, list[SegHead]] = {}
+    for cls, paths in sorted(by_class.items()):
+        heads = []
+        for pt in sorted(paths):
+            head = SegHead()
+            head.load_state_dict(torch.load(pt, map_location=device, weights_only=True))
+            heads.append(head.to(device).eval())
+        seg_heads[cls] = heads
+
+    return {}, seg_heads
